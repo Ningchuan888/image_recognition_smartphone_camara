@@ -1,1 +1,235 @@
-# image_recognition_smartphone_camara
+# Raspberry Pi 4 手機相機姿態估計專題
+
+## 目錄
+
+1. [需求](#需求)
+2. [分析](#分析)
+3. [設計](#設計)
+4. [程式結構](#程式結構)
+5. [驗證計畫](#驗證計畫)
+6. [參數調整](#參數調整)
+
+---
+
+## 需求
+
+### 功能需求
+
+| 項目 | 說明 |
+|---|---|
+| 輸入 | 單張照片（`.jpg`、`.png` 等）或即時相機串流 |
+| 輸出 | 估計手機相機的 yaw、pitch、roll 三軸姿態角（度） |
+| 視覺化 | 畫面疊加偵測直線、消失點及角度數值 |
+| 無頭模式 | 支援 `--no-display` 於無螢幕的 Raspberry Pi 上執行 |
+| 影片輸出 | 可選擇將標註結果儲存為 `.mp4` |
+
+### 規格需求
+
+| 項目 | 規格 |
+|---|---|
+| 目標平台 | Raspberry Pi 4B 或同級設備 |
+| 解析度 | 640 × 480 |
+| 目標幀率 | 5–8 FPS（即時串流模式） |
+| 依賴套件 | `opencv-python-headless`、`numpy`、`scipy` |
+| 語言 | Python 3 |
+
+### Bonus 目標
+
+- 戶外場景仍能正確估計姿態
+- 即時影片串流輸入（動態姿態估計）
+- 光流法（FoE）輔助姿態估計
+- 深度資訊估計
+- 效能優化，達到目標 FPS@resolution
+
+---
+
+## 分析
+
+### Breakdown
+
+```mermaid
+flowchart TD
+    ROOT["手機相機姿態估計系統"]
+
+    ROOT --> PRE["影像前處理"]
+    ROOT --> CORE["姿態估計核心"]
+    ROOT --> VAL["驗證模組"]
+    ROOT --> BONUS["Bonus 項目"]
+
+    PRE --> PRE1["縮放\n加速運算"]
+    PRE --> PRE2["去噪\n高斯模糊"]
+    PRE --> PRE3["灰階化\nBGR→Gray"]
+
+    CORE --> CORE1["直線偵測\nCanny + Hough"]
+    CORE --> CORE2["消失點法\n最小二乘求解"]
+    CORE --> CORE3["角度計算\nyaw / pitch / roll"]
+
+    CORE3 --> OUT1["Roll\n水平線傾斜角"]
+    CORE3 --> OUT2["Pitch\n垂直VP偏移"]
+    CORE3 --> OUT3["Yaw\n水平VP偏移"]
+
+    VAL --> VAL1["Ground Truth\nPhyphox App"]
+    VAL --> VAL2["誤差評估\nRMSE 計算"]
+
+    BONUS --> BON1["光流\nFoE 法"]
+    BONUS --> BON2["即時串流\n影片 input"]
+    BONUS --> BON3["效能測試\nFPS@resolution"]
+    BONUS --> BON4["深度估計\n戶外延伸"]
+```
+
+### 誤判來源分析
+
+| 誤判來源 | 應對方式 |
+|---|---|
+| 室內雜亂線條（家具、物品邊緣） | 設定最小線段長度（`minLineLength`）過濾短線 |
+| 非曼哈頓結構場景 | 角度分類容忍度（`angle_threshold`）適度放寬 |
+| 影像噪點造成假邊緣 | Canny 前先做高斯模糊，提高 `threshold1` |
+| 消失點落在圖像外 | 最小二乘求解加 RANSAC 排除離群線 |
+| 光線不足導致邊緣偵測失敗 | 縮小解析度、調高 Canny 靈敏度 |
+
+---
+
+## 設計
+
+### 偵測流程
+
+```mermaid
+flowchart TD
+    START(["讀取影像 / 照片"])
+    START --> ROI["套用 ROI 遮罩\nbitwise_and"]
+    ROI --> PRE["影像前處理\nresize + GaussianBlur(5x5)"]
+    PRE --> EDGE["Canny 邊緣偵測\nthreshold1=50, threshold2=150"]
+    EDGE --> LINE["霍夫直線偵測\nHoughLinesP"]
+    LINE --> CLASSIFY["直線分類\n水平 / 垂直 / 斜線"]
+
+    subgraph ROLL_BLOCK["計算 Roll"]
+        CLASSIFY --> H_LINES["水平線群\nangle < 20°"]
+        H_LINES --> ROLL_CALC["中位數傾斜角\nnp.median(angles)"]
+        ROLL_CALC --> ROLL_OUT["Roll 輸出\n單位：度"]
+    end
+
+    subgraph PITCH_BLOCK["計算 Pitch"]
+        CLASSIFY --> V_LINES["垂直線群\nangle ≈ 90°"]
+        V_LINES --> VP_V["垂直消失點\n最小二乘求解"]
+        VP_V --> PITCH_CALC["VP_y 偏移 / 焦距\narctan(Δy / f)"]
+        PITCH_CALC --> PITCH_OUT["Pitch 輸出\n單位：度"]
+    end
+
+    subgraph YAW_BLOCK["計算 Yaw"]
+        H_LINES --> VP_H["水平消失點\n最小二乘求解"]
+        VP_H --> YAW_CALC["VP_x 偏移 / 焦距\narctan(Δx / f)"]
+        YAW_CALC --> YAW_OUT["Yaw 輸出\n單位：度"]
+    end
+
+    ROLL_OUT --> CHECK
+    PITCH_OUT --> CHECK
+    YAW_OUT --> CHECK
+
+    CHECK{"偵測到足夠直線？\nlen(lines) ≥ threshold"}
+    CHECK -- Yes --> VALID["姿態估計有效\nroll / pitch / yaw"]
+    CHECK -- No --> INVALID["估計失敗\n回傳 0.0, 0.0, 0.0"]
+
+    VALID --> VAL{"與 Ground Truth 比對？\nPhyphox App 數據"}
+    VAL -- Yes --> RMSE["計算 RMSE 誤差\n評估精度"]
+    VAL -- No --> VIS["視覺化疊圖\n畫直線 + 顯示角度"]
+    RMSE --> VIS
+
+    INVALID --> VIS
+    VIS --> END(["輸出結果 / 寫入紀錄"])
+```
+
+### 核心 API（模組介面）
+
+| 方法 | 輸入 | 輸出 |
+|---|---|---|
+| `preprocess(image_path, scale)` | 圖片路徑、縮放比例 | `(img, blurred)` |
+| `detect_lines(blurred_img)` | 灰階模糊影像 | `lines`（HoughLinesP 結果） |
+| `classify_lines(lines, angle_threshold)` | 直線列表、角度容忍度 | `(horizontal, vertical, diagonal)` |
+| `find_vanishing_point(lines)` | 直線列表 | `(x, y)` 消失點座標 |
+| `estimate_pose(h_lines, v_lines, img_shape)` | 水平線、垂直線、影像尺寸 | `{"yaw": float, "pitch": float, "roll": float}` |
+
+---
+
+### config.json 參數說明
+
+```jsonc
+{
+  "camera": {
+    "width": 640,
+    "height": 480,
+    "fps": 15,
+    "frame_skip": 2,
+    "roi": [0, 0, 640, 480]
+  },
+  "preprocess": {
+    "scale":          "縮放比例（建議 0.5，加速樹莓派運算）",
+    "blur_kernel":    "高斯模糊核心大小（建議 5，奇數）"
+  },
+  "edge": {
+    "canny_low":      "Canny 邊緣偵測下門檻（建議 50）",
+    "canny_high":     "Canny 邊緣偵測上門檻（建議 150）"
+  },
+  "hough": {
+    "rho":            "距離解析度（建議 1）",
+    "theta_deg":      "角度解析度（建議 1，單位：度）",
+    "threshold":      "累積門檻（建議 80，越高線越少但越可靠）",
+    "min_line_length":"最小線段長度（建議 60，過濾短雜線）",
+    "max_line_gap":   "最大線段間距（建議 10，允許小斷口）"
+  },
+  "classify": {
+    "angle_threshold":"水平/垂直分類容忍角度（建議 20°）"
+  },
+  "pose": {
+    "focal_length_ratio": "焦距估算比例（建議 1.2，乘以影像寬度）",
+    "min_lines_required": "最少需要的直線數量才進行估計（建議 5）"
+  }
+}
+```
+
+---
+
+## 程式結構
+
+```
+pose_estimation/
+├── main.py               # 主程式入口
+├── config.json           # 參數設定檔
+├── preprocess.py         # 影像前處理模組
+├── line_detector.py      # 直線偵測與分類模組
+├── vanishing_point.py    # 消失點計算模組
+├── pose_estimator.py     # 姿態角估計核心模組
+├── visualizer.py         # 視覺化疊圖模組
+├── validator.py          # Ground Truth 比對與 RMSE 計算
+└── README.md
+```
+
+---
+
+## 驗證計畫
+
+| 測試項目 | 測試方法 | 預期結果 |
+|---|---|---|
+| 單張靜態照片 | `python main.py --source image.jpg` | 輸出 yaw / pitch / roll 數值 |
+| Roll 角驗證 | 手機水平放置拍攝，Phyphox 記錄 roll ≈ 0° | 程式估計值誤差 < 3° |
+| Pitch 角驗證 | 手機仰角 30° 拍攝，Phyphox 記錄 pitch ≈ 30° | 程式估計值誤差 < 5° |
+| Yaw 角驗證 | 手機左右旋轉拍攝，Phyphox 記錄 yaw 值 | 程式估計值趨勢一致 |
+| 直線不足場景 | 空曠場景或低紋理牆面 | 回傳 `0.0, 0.0, 0.0` 且不崩潰 |
+| 低效能測試 | Raspberry Pi 4B 執行 640×480 靜態照片 | 處理時間 < 1 秒 |
+| 即時串流測試（Bonus） | `python main.py --source 0` | 穩定達到 5 FPS 以上 |
+| 長時間測試 | 連續執行 30 分鐘 | 不當機、記憶體不洩漏 |
+
+---
+
+## 參數調整
+
+| 問題 | 調整方式 |
+|---|---|
+| 偵測到的直線太少 | 降低 `hough.threshold` 或降低 `hough.min_line_length` |
+| 直線雜訊太多 | 提高 `hough.threshold` 或提高 `hough.min_line_length` |
+| Roll 角不準 | 調整 `classify.angle_threshold`，讓水平線分類更嚴格 |
+| Pitch / Yaw 偏差大 | 校正 `pose.focal_length_ratio`（用棋盤格相機校正取得真實焦距） |
+| 消失點落在畫面外 | 屬正常情況，確認 `estimate_pose` 有處理畫面外消失點的 fallback |
+| 邊緣偵測抓不到線 | 降低 `edge.canny_low`，或縮小 `preprocess.blur_kernel` |
+| 邊緣偵測雜訊太多 | 提高 `edge.canny_low`，或加大 `preprocess.blur_kernel` |
+| 樹莓派處理太慢 | 降低 `preprocess.scale`（如 0.3）或提高 `camera.frame_skip` |
+| 特定場景估計失敗 | 提高 `pose.min_lines_required` 門檻，避免用太少線強行估計 |
