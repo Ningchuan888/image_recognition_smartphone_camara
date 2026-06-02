@@ -1,0 +1,31 @@
+{
+  "camera": {
+    "width": 640,
+    "height": 480,
+    "fps": 15,
+    "frame_skip": 2,
+    "roi": [0, 0, 640, 480]
+  },
+  "preprocess": {
+    "scale": 0.5,
+    "blur_kernel": 5
+  },
+  "edge": {
+    "canny_low": 50,
+    "canny_high": 150
+  },
+  "hough": {
+    "rho": 1,
+    "theta_deg": 1,
+    "threshold": 80,
+    "min_line_length": 60,
+    "max_line_gap": 10
+  },
+  "classify": {
+    "angle_threshold": 20
+  },
+  "pose": {
+    "focal_length_ratio": 1.2,
+    "min_lines_required": 5
+  }
+}
