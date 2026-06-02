@@ -50,31 +50,27 @@
 ```mermaid
 flowchart TD
     ROOT["手機相機姿態估計系統"]
-
+ 
     ROOT --> PRE["影像前處理"]
     ROOT --> CORE["姿態估計核心"]
     ROOT --> VAL["驗證模組"]
-    ROOT --> BONUS["Bonus 項目"]
-
+ 
+    PRE --> PRE0["ROI 遮罩"]
     PRE --> PRE1["縮放\n加速運算"]
     PRE --> PRE2["去噪\n高斯模糊"]
     PRE --> PRE3["灰階化\nBGR→Gray"]
-
+ 
     CORE --> CORE1["直線偵測\nCanny + Hough"]
     CORE --> CORE2["消失點法\n最小二乘求解"]
     CORE --> CORE3["角度計算\nyaw / pitch / roll"]
-
+ 
     CORE3 --> OUT1["Roll\n水平線傾斜角"]
     CORE3 --> OUT2["Pitch\n垂直VP偏移"]
     CORE3 --> OUT3["Yaw\n水平VP偏移"]
-
+ 
     VAL --> VAL1["Ground Truth\nPhyphox App"]
     VAL --> VAL2["誤差評估\nRMSE 計算"]
 
-    BONUS --> BON1["光流\nFoE 法"]
-    BONUS --> BON2["即時串流\n影片 input"]
-    BONUS --> BON3["效能測試\nFPS@resolution"]
-    BONUS --> BON4["深度估計\n戶外延伸"]
 ```
 
 ### 誤判來源分析
@@ -94,191 +90,144 @@ flowchart TD
  
 ---
  
-### 1. `cv2.resize` — 影像縮放
- 
-**用途：** 將輸入照片縮小（預設 0.5 倍），減少後續每一步的像素運算量，讓樹莓派能在可接受時間內完成處理。
- 
-**原理：** 依照指定的縮放比例（`fx`、`fy`），對影像做雙線性內插（預設）重新取樣，產生較小的輸出影像。縮小後每個像素代表原圖更大的區域，細節減少但結構保留。
- 
-```python
-img = cv2.resize(img, (0, 0), fx=0.5, fy=0.5)
-```
+### 🔧 影像前處理
  
 ---
  
-### 2. `cv2.cvtColor(BGR2GRAY)` — 灰階轉換
+#### `cv2.bitwise_and` — ROI 遮罩
  
-**用途：** 將彩色 BGR 影像轉為單通道灰階，後續的邊緣偵測、直線偵測只需要亮度資訊，不需要顏色，轉換後可減少 2/3 的資料量。
- 
-**原理：** 依照人眼對顏色的感知權重做加權平均：
-`Gray = 0.114·B + 0.587·G + 0.299·R`
- 
-```python
-gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-```
- 
----
- 
-### 3. `cv2.GaussianBlur` — 高斯模糊
- 
-**用途：** 在 Canny 邊緣偵測之前先做平滑，抑制影像中的高頻噪點，避免噪點被誤判為邊緣，從而產生大量假直線干擾後續估計。
- 
-**原理：** 用一個高斯函數產生的卷積核（如 5×5）對影像做卷積，每個像素的新值是其鄰域像素的加權平均，距離中心越遠權重越小。核越大、模糊越強，但也會損失更多細節。
- 
-```python
-blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-```
- 
----
- 
-### 4. `cv2.Canny` — Canny 邊緣偵測
- 
-**用途：** 找出影像中亮度變化劇烈的位置（邊緣），這些邊緣正是牆壁交線、門框、地板磚縫等結構線條所在，是後續霍夫直線偵測的輸入。
- 
-**原理：** 分四步驟執行：
-1. 計算每個像素的梯度強度與方向（Sobel 算子）
-2. 非極大值抑制（Non-maximum Suppression）：只保留梯度方向上的局部極大值，讓邊緣變細
-3. 雙門檻篩選：強邊緣（> `threshold2`）直接保留，弱邊緣（`threshold1`～`threshold2`）僅在與強邊緣相連時保留
-4. 輸出二值化邊緣圖
-```python
-edges = cv2.Canny(blurred, threshold1=50, threshold2=150)
-```
- 
----
- 
-### 5. `cv2.HoughLinesP` — 機率式霍夫直線偵測
- 
-**用途：** 從 Canny 輸出的邊緣圖中，找出符合直線幾何的線段，作為計算消失點和姿態角的原始資料。
- 
-**原理：** 標準霍夫轉換將每個邊緣像素從影像空間映射到參數空間（ρ, θ），共線的像素在參數空間會匯聚到同一點，累積投票數超過門檻即視為一條直線。`HoughLinesP` 為機率式改良版，只隨機取樣部分像素，速度更快，且直接輸出線段的端點座標（`x1, y1, x2, y2`）而非無限長直線。
- 
-| 參數 | 意義 |
+| | |
 |---|---|
-| `rho=1` | 距離解析度 1 像素 |
-| `theta=π/180` | 角度解析度 1 度 |
-| `threshold=80` | 累積票數門檻 |
-| `minLineLength=60` | 線段最短長度（過濾短雜線） |
-| `maxLineGap=10` | 線段間允許的最大斷口 |
- 
-```python
-lines = cv2.HoughLinesP(edges, 1, np.pi/180, 80,
-                        minLineLength=60, maxLineGap=10)
-```
+| **WHAT** | Region of Interest，感興趣區域遮罩，將畫面限縮於特定範圍內處理。 |
+| **WHY** | 排除畫面邊角或不含結構線條的區域，減少雜訊來源並節省樹莓派的運算資源。 |
+| **HOW** | 預先建立與影像同尺寸的二值遮罩（ROI 為白色 255、其餘為 0），與原圖做位元 AND，ROI 外像素全部歸零。 |
  
 ---
  
-### 6. `classify_lines` — 直線分類
+#### `cv2.resize` — 影像縮放
  
-**用途：** 將偵測到的線段依照傾斜角度分成水平線、垂直線、斜線三類，分別用於計算 Roll、Pitch、Yaw，避免不同方向的線互相干擾。
- 
-**原理：** 對每條線段計算其傾斜角：
-`angle = arctan2(y2−y1, x2−x1)`（單位：度）
-- `|angle| < 20°` → 水平線（用於 Roll 和水平消失點）
-- `|angle − 90°| < 20°` → 垂直線（用於垂直消失點）
-- 其餘 → 斜線（暫不使用）
-```python
-angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
-```
+| | |
+|---|---|
+| **WHAT** | 依指定比例對影像重新取樣，產生較小的輸出影像。 |
+| **WHY** | 縮小後每步運算的像素數量減少，讓樹莓派能在可接受時間內完成全流程。 |
+| **HOW** | 使用雙線性內插依 `fx`、`fy` 縮放比例重新取樣，預設縮 0.5 倍，細節減少但結構保留。 |
  
 ---
  
-### 7. `line_to_homogeneous` — 直線齊次座標轉換
+#### `cv2.cvtColor(BGR2GRAY)` — 灰階轉換
  
-**用途：** 將一條由兩端點定義的線段轉換為齊次座標表示，使後續可以用向量外積（cross product）直接求兩直線的交點，數學形式簡潔且穩定。
- 
-**原理：** 平面上的一條直線可以用齊次向量 `l = [a, b, c]` 表示，滿足 `ax + by + c = 0`。兩點 `P1 = (x1, y1, 1)`、`P2 = (x2, y2, 1)` 的外積即為通過這兩點的直線：
-`l = P1 × P2`
- 
-兩直線 `l1`、`l2` 的交點則為：
-`P = l1 × l2`（再除以第三個分量還原為 2D 座標）
- 
-```python
-def line_to_homogeneous(x1, y1, x2, y2):
-    p1 = np.array([x1, y1, 1])
-    p2 = np.array([x2, y2, 1])
-    return np.cross(p1, p2)
-```
+| | |
+|---|---|
+| **WHAT** | 將彩色 BGR 影像轉為單通道灰階影像。 |
+| **WHY** | 邊緣偵測與直線偵測只需要亮度資訊，轉換後資料量減少 2/3，加速後續計算。 |
+| **HOW** | 依人眼感知權重做加權平均：`Gray = 0.114·B + 0.587·G + 0.299·R`，輸出單通道影像。 |
  
 ---
  
-### 8. `find_vanishing_point` — 消失點求解（最小二乘法）
+#### `cv2.GaussianBlur` — 高斯模糊
  
-**用途：** 給定一組同類直線（如所有水平線），找出它們在圖像中最可能的匯聚點（消失點），此點的位置直接對應相機的旋轉角度。
- 
-**原理：** 將每條直線轉為 `ax + by = −c` 的形式，組成超定方程組（方程數 > 未知數 2 個），用最小二乘法（`np.linalg.lstsq`）求使所有誤差平方和最小的解 `(x, y)`。當場景中的直線真的平行時，解就是理論上的消失點；有噪點時，最小二乘法給出統計上最佳的估計。
- 
-```python
-vp, _, _, _ = np.linalg.lstsq(A, b_vec, rcond=None)
-# vp = (x, y) 消失點座標
-```
+| | |
+|---|---|
+| **WHAT** | 使用高斯核對影像進行平滑化的濾波技術。 |
+| **WHY** | 抑制高頻噪點，避免噪點被 Canny 誤判為邊緣，進而產生大量假直線干擾姿態估計。 |
+| **HOW** | 以高斯函數產生卷積核（如 5×5），對每個像素取鄰域加權平均，距中心越遠權重越小；核越大模糊越強但細節損失越多。 |
  
 ---
  
-### 9. `np.median` — 中位數（Roll 角計算）
- 
-**用途：** 計算所有水平線傾斜角的中位數，作為 Roll 角的估計值。相較於平均數，中位數對離群值（少數方向明顯偏差的線）更具抵抗力。
- 
-**原理：** 將所有水平線段的傾斜角排序後取中間值。即使其中幾條線被錯誤分類或角度異常，中位數仍能反映大多數水平線的真實傾斜方向，等同於對 Roll 角做穩健估計（robust estimation）。
- 
-```python
-roll = np.median(roll_angles)
-```
+### 🔍 直線偵測模組
  
 ---
  
-### 10. `np.arctan2` — 反正切（角度轉換）
+#### `cv2.Canny` — Canny 邊緣偵測
  
-**用途：** 將消失點的像素偏移量轉換為實際的角度（度），用於計算 Pitch 和 Yaw。
- 
-**原理：** 根據針孔相機模型，若消失點在圖像中的偏移為 `Δ`，相機焦距為 `f`，則對應的旋轉角為：
-`θ = arctan(Δ / f)`
- 
-`arctan2(y, x)` 相比 `arctan(y/x)` 能正確處理所有象限（包含 `x=0` 的情況），避免除以零。焦距 `f` 以影像寬度 × `focal_length_ratio`（預設 1.2）估算，若有棋盤格校正數據可替換為真實焦距。
- 
-```python
-pitch = np.degrees(np.arctan2(vp_vertical[1] - cy, focal_length))
-yaw   = np.degrees(np.arctan2(vp_horizontal[0] - cx, focal_length))
-```
+| | |
+|---|---|
+| **WHAT** | 多階段邊緣偵測演算法，找出影像中亮度變化劇烈的位置。 |
+| **WHY** | 牆壁交線、門框、地板磚縫等結構線條正位於邊緣處，是後續霍夫直線偵測的必要輸入。 |
+| **HOW** | ① Sobel 計算梯度強度與方向 → ② 非極大值抑制（NMS）細化邊緣 → ③ 雙門檻篩選（強邊緣直接保留，弱邊緣需與強邊緣相連）→ ④ 輸出二值邊緣圖。 |
  
 ---
  
-### 11. `np.sqrt(np.mean((pred - gt) ** 2))` — RMSE 誤差計算
+#### `cv2.HoughLinesP` — 機率式霍夫直線偵測
  
-**用途：** 量化程式估計的角度與 Phyphox App 記錄的真實角度之間的差距，作為系統精度的客觀指標。
- 
-**原理：** Root Mean Square Error（均方根誤差）= 所有樣本的預測誤差平方平均後開根號。單位與原始角度相同（度），數值越小代表估計越準確。相較於平均絕對誤差（MAE），RMSE 對大誤差懲罰更重，能突顯系統在特定場景下的失效情況。
- 
-```python
-rmse = np.sqrt(np.mean((predicted_angles - ground_truth) ** 2))
-```
+| | |
+|---|---|
+| **WHAT** | 從邊緣圖中找出符合直線幾何的線段，輸出各線段的端點座標 `(x1, y1, x2, y2)`。 |
+| **WHY** | 消失點計算需要大量結構線段作為輸入；HoughLinesP 直接輸出有限長度線段，比標準霍夫轉換更快且更實用。 |
+| **HOW** | 將邊緣像素映射到參數空間（ρ, θ），共線像素匯聚投票，機率式版本隨機取樣加速，累積票數超過 `threshold` 即輸出線段。 |
  
 ---
  
-### 12. `cv2.bitwise_and`（ROI 遮罩）
+#### `classify_lines` — 直線分類
  
-**用途：** 限制處理區域只在畫面的有效範圍內（ROI，Region of Interest），排除畫面邊角或不含結構線條的區域，減少雜訊來源並節省運算資源。
- 
-**原理：** 預先建立一張與影像同尺寸的二值遮罩（ROI 區域為白色 255，其餘為黑色 0），與原始影像做位元 AND 運算，ROI 外的像素全部歸零，等同於只保留感興趣區域。
- 
-```python
-masked = cv2.bitwise_and(frame, frame, mask=roi_mask)
-```
+| | |
+|---|---|
+| **WHAT** | 將偵測到的線段依傾斜角分成水平線、垂直線、斜線三類。 |
+| **WHY** | Roll、Pitch、Yaw 分別需要不同方向的直線，混用會互相干擾導致消失點計算偏差。 |
+| **HOW** | 計算每條線段角度 `arctan2(y2−y1, x2−x1)`；絕對值 < 20° 為水平線，與 90° 差值 < 20° 為垂直線，其餘為斜線。 |
  
 ---
  
-### 13. `cv2.putText` / `cv2.line`（視覺化疊圖）
+### 📐 姿態估計核心
  
-**用途：** 將偵測到的直線、消失點位置、正十字準星及 yaw/pitch/roll 數值疊加顯示在影像上，方便即時觀察系統狀態與除錯。
+---
  
-**原理：** 直接在影像陣列上用 OpenCV 的繪圖函式寫入像素，不影響實際估計數值。`cv2.line` 畫線段，`cv2.circle` 標記消失點，`cv2.putText` 用 Hershey 字型寫入文字。
+#### `np.linalg.lstsq` — 消失點求解（最小二乘法）
  
-```python
-cv2.line(img, (x1,y1), (x2,y2), (0,255,0), 1)   # 偵測直線（綠）
-cv2.line(img, (cx-30,cy), (cx+30,cy), (0,0,255), 2)  # 正十字準星（紅）
-cv2.putText(img, f"Y:{yaw:.1f} P:{pitch:.1f} R:{roll:.1f}",
-            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,0), 2)
-```
+| | |
+|---|---|
+| **WHAT** | 給定一組同類直線，找出它們在圖像中最可能的匯聚點（消失點）。 |
+| **WHY** | 消失點的像素座標直接對應相機旋轉角度；最小二乘法在有噪點的真實場景中給出統計上最佳的估計。 |
+| **HOW** | 先將每條線段的兩端點轉為齊次座標向量 `l = P1 × P2`（外積），得到 `ax + by + c = 0` 的直線表示；再將所有直線組成超定方程組 `ax + by = −c`，用最小二乘法求使誤差平方和最小的交點座標 `(x, y)`。 |
  
+---
+ 
+#### `np.median` — Roll 角計算
+ 
+| | |
+|---|---|
+| **WHAT** | 取所有水平線傾斜角的中位數作為 Roll 角估計值。 |
+| **WHY** | 中位數對離群值（少數方向偏差的線）具抵抗力，比平均數更能反映大多數水平線的真實傾斜方向。 |
+| **HOW** | 將所有水平線傾斜角排序後取中間值，即使部分線段被錯誤分類或角度異常，結果仍穩定，屬穩健估計（robust estimation）。 |
+ 
+---
+ 
+#### `np.arctan2` — Pitch / Yaw 角計算
+ 
+| | |
+|---|---|
+| **WHAT** | 將消失點的像素偏移量轉換為實際旋轉角度（度）。 |
+| **WHY** | 針孔相機模型下，消失點偏移與相機旋轉角度成正切關係；`arctan2` 可正確處理所有象限，避免除以零。 |
+| **HOW** | 依公式 `θ = arctan(Δ / f)`，其中 Δ 為消失點偏離影像中心的像素數，f 為估算焦距（影像寬 × 1.2）；有棋盤格校正數據可替換為真實焦距。 |
+ 
+---
+ 
+### ✅ 驗證模組
+ 
+---
+ 
+#### RMSE — 均方根誤差
+ 
+| | |
+|---|---|
+| **WHAT** | Root Mean Square Error，量化預測角度與 Phyphox App 真實角度之間的差距。 |
+| **WHY** | 提供客觀的精度指標，且對大誤差懲罰更重（相較 MAE），能突顯系統在特定場景下的失效情況。 |
+| **HOW** | 計算每筆樣本的預測誤差後取平方、平均、開根號：`√(mean((pred − gt)²))`，單位與原始角度相同（度）。 |
+ 
+---
+ 
+### 🖥️ 視覺化模組
+ 
+---
+ 
+#### `cv2.line` / `cv2.putText` — 疊圖顯示
+ 
+| | |
+|---|---|
+| **WHAT** | 將偵測直線、消失點、正十字準星及角度數值疊加顯示於影像上。 |
+| **WHY** | 方便即時觀察系統狀態與除錯，不影響實際估計數值，僅用於人工確認結果正確性。 |
+| **HOW** | `cv2.line` 畫線段（綠色為偵測直線、紅色為準星），`cv2.circle` 標記消失點，`cv2.putText` 用 Hershey 字型寫入 yaw / pitch / roll 數值。 |
+
 ---
 
 ## 設計
@@ -288,44 +237,42 @@ cv2.putText(img, f"Y:{yaw:.1f} P:{pitch:.1f} R:{roll:.1f}",
 ```mermaid
 flowchart TD
     START(["讀取影像 / 照片"])
-    START --> ROI["套用 ROI 遮罩\nbitwise_and"]
-    ROI --> PRE["影像前處理\nresize + GaussianBlur(5x5)"]
-    PRE --> EDGE["Canny 邊緣偵測\nthreshold1=50, threshold2=150"]
-    EDGE --> LINE["霍夫直線偵測\nHoughLinesP"]
-    LINE --> CLASSIFY["直線分類\n水平 / 垂直 / 斜線"]
-
+    START --> PRE["影像前處理\nROI 遮罩 → 縮放 → 灰階化 → 高斯模糊"]
+    PRE --> DET["邊緣與直線偵測\nCanny → HoughLinesP"]
+    DET --> CLASSIFY["直線分類\n水平 / 垂直 / 斜線"]
+ 
     subgraph ROLL_BLOCK["計算 Roll"]
         CLASSIFY --> H_LINES["水平線群\nangle < 20°"]
         H_LINES --> ROLL_CALC["中位數傾斜角\nnp.median(angles)"]
         ROLL_CALC --> ROLL_OUT["Roll 輸出\n單位：度"]
     end
-
+ 
     subgraph PITCH_BLOCK["計算 Pitch"]
         CLASSIFY --> V_LINES["垂直線群\nangle ≈ 90°"]
         V_LINES --> VP_V["垂直消失點\n最小二乘求解"]
         VP_V --> PITCH_CALC["VP_y 偏移 / 焦距\narctan(Δy / f)"]
         PITCH_CALC --> PITCH_OUT["Pitch 輸出\n單位：度"]
     end
-
+ 
     subgraph YAW_BLOCK["計算 Yaw"]
         H_LINES --> VP_H["水平消失點\n最小二乘求解"]
         VP_H --> YAW_CALC["VP_x 偏移 / 焦距\narctan(Δx / f)"]
         YAW_CALC --> YAW_OUT["Yaw 輸出\n單位：度"]
     end
-
+ 
     ROLL_OUT --> CHECK
     PITCH_OUT --> CHECK
     YAW_OUT --> CHECK
-
+ 
     CHECK{"偵測到足夠直線？\nlen(lines) ≥ threshold"}
     CHECK -- Yes --> VALID["姿態估計有效\nroll / pitch / yaw"]
     CHECK -- No --> INVALID["估計失敗\n回傳 0.0, 0.0, 0.0"]
-
+ 
     VALID --> VAL{"與 Ground Truth 比對？\nPhyphox App 數據"}
     VAL -- Yes --> RMSE["計算 RMSE 誤差\n評估精度"]
     VAL -- No --> VIS["視覺化疊圖\n畫直線 + 顯示角度"]
     RMSE --> VIS
-
+ 
     INVALID --> VIS
     VIS --> END(["輸出結果 / 寫入紀錄"])
 ```
