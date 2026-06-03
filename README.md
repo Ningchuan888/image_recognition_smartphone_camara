@@ -5,9 +5,8 @@
 1. [需求](#需求)
 2. [分析](#分析)
 3. [設計](#設計)
-4. [程式結構](#程式結構)
-5. [驗證計畫](#驗證計畫)
-6. [參數調整](#參數調整)
+4. [驗證計畫](#驗證計畫)
+5. [參數調整](#參數調整)
 
 ---
 
@@ -327,22 +326,6 @@ flowchart TD
 
 ---
 
-## 程式結構
-
-```
-pose_estimation/
-├── main.py               # 主程式入口
-├── config.json           # 參數設定檔
-├── preprocess.py         # 影像前處理模組
-├── line_detector.py      # 直線偵測與分類模組
-├── vanishing_point.py    # 消失點計算模組
-├── pose_estimator.py     # 姿態角估計核心模組
-├── visualizer.py         # 視覺化疊圖模組
-├── validator.py          # Ground Truth 比對與 RMSE 計算
-└── README.md
-```
-
----
 
 ## 驗證計畫
 
