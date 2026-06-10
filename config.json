@@ -4,7 +4,7 @@
     "height": 480,
     "fps": 15,
     "frame_skip": 2,
-    "roi": [0, 0, 640, 480]
+    "roi": null
   },
   "preprocess": {
     "scale": 0.5,
@@ -22,10 +22,12 @@
     "max_line_gap": 10
   },
   "classify": {
-    "angle_threshold": 20
+    "angle_threshold": 35
   },
   "pose": {
-    "focal_length_ratio": 1.2,
+    "focal_length_px": 681.9,
+    "focal_length_ratio": 1.076,
+    "calibration_file": "20260610.npz",
     "min_lines_required": 5
-  }
+}
 }
