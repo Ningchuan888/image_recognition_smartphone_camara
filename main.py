@@ -93,11 +93,13 @@ def detect_lines(blurred):
     return lines
 
 
-def classify_lines(lines, img_shape=None):
+def classify_lines(lines, img_shape=None, yaw_compensation=0.0):
     """
     依傾斜角分類直線。
-    橫式照片（寬 > 高）時，水平線與垂直線的角色對調：
-    場景的垂直結構在橫式影像中會呈現為接近水平的線。
+    yaw_compensation: 畫面傾斜量（由 estimate_gravity_direction 先算出），
+                      用來補正分類窗口，避免 Yaw 改變時垂直線被誤分類，
+                      導致 Pitch 估計跟著亂跳。
+    橫式照片（寬 > 高）時，水平線與垂直線的角色對調。
     """
     horizontal, vertical, diagonal = [], [], []
     if lines is None:
@@ -112,14 +114,19 @@ def classify_lines(lines, img_shape=None):
     for line in lines:
         x1, y1, x2, y2 = line[0]
         angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
-        if abs(angle) < ANGLE_THRESHOLD:
+
+        # 補正：扣掉畫面傾斜量後再分類，讓水平/垂直的判斷跟著畫面旋轉
+        corrected = angle - yaw_compensation
+        corrected = (corrected + 90) % 180 - 90   # 正規化到 -90 ~ 90
+
+        if abs(corrected) < ANGLE_THRESHOLD:
             if is_landscape:
-                vertical.append((x1, y1, x2, y2))   # 橫式：水平線 → 當垂直線用
+                vertical.append((x1, y1, x2, y2))
             else:
                 horizontal.append((x1, y1, x2, y2))
-        elif abs(abs(angle) - 90) < ANGLE_THRESHOLD:
+        elif abs(abs(corrected) - 90) < ANGLE_THRESHOLD:
             if is_landscape:
-                horizontal.append((x1, y1, x2, y2)) # 橫式：垂直線 → 當水平線用
+                horizontal.append((x1, y1, x2, y2))
             else:
                 vertical.append((x1, y1, x2, y2))
         else:
@@ -336,14 +343,16 @@ def estimate_pose(lines, h_lines, v_lines, img_shape):
     if vp_v is not None:
         pitch = float(np.degrees(np.arctan2(vp_v[1] - cy, focal_length)))
 
-    # ── Yaw：方向一 放寬門檻（35°）後的水平線消失點 ────
+    # ── Yaw：方向一 放寬門檻（35°）後的水平線消失點（同樣補正傾斜量）────
     yaw = 0.0
     h_lines_wide = []
     if lines is not None:
         for line in lines:
             x1, y1, x2, y2 = line[0]
             angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
-            if abs(angle) < 35:
+            corrected = angle - roll
+            corrected = (corrected + 90) % 180 - 90
+            if abs(corrected) < 35:
                 h_lines_wide.append((x1, y1, x2, y2))
     vp_h = find_vanishing_point_ransac(h_lines_wide) if h_lines_wide else None
     if vp_h is not None:
@@ -372,7 +381,7 @@ def visualize(img, lines, pose):
     cv2.line(result, (cx-30, cy), (cx+30, cy), (0, 0, 255), 2)
     cv2.line(result, (cx, cy-30), (cx, cy+30), (0, 0, 255), 2)
 
-    text = f"Yaw: {pose['yaw']:.1f}  Pitch: {pose['pitch']:.1f}  Roll: {pose['roll']:.1f}"
+    text = f"Roll: {pose['yaw']:.1f}  Pitch: {pose['pitch']:.1f}  Yaw: {pose['roll']:.1f}"
     cv2.putText(result, text, (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2)
     return result
@@ -382,10 +391,16 @@ def visualize(img, lines, pose):
 #  主流程
 # ════════════════════════════════════════════════════
 def process_frame(frame, verbose=False):
-    img, blurred        = preprocess(frame)
-    lines               = detect_lines(blurred)
-    h_lines, v_lines, _ = classify_lines(lines, img.shape)
-    pose                = estimate_pose(lines, h_lines, v_lines, img.shape)
+    img, blurred = preprocess(frame)
+    lines        = detect_lines(blurred)
+
+    # 第一階段：先用直方圖估計畫面傾斜量（對應顯示的 Yaw）
+    yaw_tilt, _, _ = estimate_gravity_direction(lines)
+
+    # 第二階段：用傾斜量補正分類窗口，避免 Pitch 被 Yaw 干擾
+    h_lines, v_lines, _ = classify_lines(lines, img.shape, yaw_compensation=yaw_tilt)
+
+    pose = estimate_pose(lines, h_lines, v_lines, img.shape)
 
     if verbose:
         print(f"Yaw:   {pose['yaw']}°")
