@@ -322,7 +322,7 @@ flowchart TD
     "height": 480,
     "fps": 15,
     "frame_skip": 2,
-    "roi": [0, 0, 640, 480]
+    "roi": null           // 改為 null，表示使用全畫面不做裁切
   },
   "preprocess": {
     "scale":          "縮放比例（建議 0.5，加速樹莓派運算）",
@@ -340,10 +340,12 @@ flowchart TD
     "max_line_gap":   "最大線段間距（建議 10，允許小斷口）"
   },
   "classify": {
-    "angle_threshold":"水平/垂直分類容忍角度（建議 20°）"
+    "angle_threshold":"水平/垂直分類容忍角度（從建議 20° 放寬至 35°，因為場景 Yaw 角較大時結構線偏離水平較多，需要更寬的窗口才能抓到足夠的線條）"
   },
   "pose": {
-    "focal_length_ratio": "焦距估算比例（建議 1.2，乘以影像寬度）",
+    "focal_length_px": 681.9,           // 新增：由棋盤格相機校正取得的真實焦距（像素），設定此值後 focal_length_ratio 會被忽略
+    "focal_length_ratio": "焦距估算比例（從建議 1.2 調整為 1.076，由實測誤差校正；僅在未設定 focal_length_px 時使用）",
+    "calibration_file": "20260610.npz", // 新增：相機校正檔路徑（含 mtx / dist），由 15 張棋盤格照片校正產生
     "min_lines_required": "最少需要的直線數量才進行估計（建議 5）"
   }
 }
