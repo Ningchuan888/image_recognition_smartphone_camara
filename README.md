@@ -88,6 +88,10 @@ flowchart TD
 本節依照處理流程順序，逐一說明每個使用到的演算法與函式，解釋其原理及在本專題中的用途。
  
 ---
+## 三軸定義
+<img width="714" height="571" alt="image" src="https://github.com/user-attachments/assets/ea9d768a-cbd1-44ae-b596-af04e80fc896" />
+
+---
  
 ### 🔧 影像前處理
  
