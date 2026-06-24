@@ -334,29 +334,22 @@ def estimate_pose(lines, h_lines, v_lines, img_shape):
     if lines is not None and len(lines) < MIN_LINES_REQUIRED:
         print(f"[WARNING] 直線數量不足（{len(lines)} 條），結果可能不準確")
 
-    # ── Roll：重力方向估計（直方圖第一峰值）────────────
+    # ── 畫面傾斜量（用於補正分類，對應顯示的 Yaw）────────
     roll, hist_smooth, second_peak = estimate_gravity_direction(lines)
 
-    # ── Pitch：垂直消失點 y 偏移 ──────────────────────
+    # ── Pitch：只用畫面上半部（60% 以上）的垂直線估計 ────
+    # 下半部桌面雜物的垂直邊緣干擾嚴重，濾掉後 RANSAC 更穩定
     pitch = 0.0
-    vp_v  = find_vanishing_point_ransac(v_lines) if v_lines else None
+    v_lines_upper = [
+        (x1, y1, x2, y2) for (x1, y1, x2, y2) in v_lines
+        if (y1 + y2) / 2 < h * 0.6
+    ] if v_lines else []
+    vp_v = find_vanishing_point_ransac(v_lines_upper) if v_lines_upper else None
     if vp_v is not None:
         pitch = float(np.degrees(np.arctan2(vp_v[1] - cy, focal_length)))
 
-    # ── Yaw：方向一 放寬門檻（35°）後的水平線消失點（同樣補正傾斜量）────
+    # ── Roll：繞手機長軸旋轉，無法由照片內容推算，固定為 0° ─
     yaw = 0.0
-    h_lines_wide = []
-    if lines is not None:
-        for line in lines:
-            x1, y1, x2, y2 = line[0]
-            angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
-            corrected = angle - roll
-            corrected = (corrected + 90) % 180 - 90
-            if abs(corrected) < 35:
-                h_lines_wide.append((x1, y1, x2, y2))
-    vp_h = find_vanishing_point_ransac(h_lines_wide) if h_lines_wide else None
-    if vp_h is not None:
-        yaw = float(np.degrees(np.arctan2(vp_h[0] - cx, focal_length)))
 
     return {
         "yaw":   round(yaw,   2),
