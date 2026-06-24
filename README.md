@@ -370,8 +370,10 @@ flowchart TD
 ---
 
 ## 誤差曲線
-<img width="900" height="337" alt="image" src="https://github.com/user-attachments/assets/d0f0887a-9766-44b9-a333-fa3a870fb74c" />
-<img width="900" height="300" alt="誤差柱狀圖" src="https://github.com/user-attachments/assets/8f6f49c6-2554-4e0e-ab94-9a987401a399" />
+### Yaw
+<img width="900" height="337" alt="yaw誤差曲線圖" src="https://github.com/user-attachments/assets/3771b8b4-8c8f-4fb2-85ec-28871fc21803" />
+<img width="900" height="300" alt="yaw誤差柱狀圖" src="https://github.com/user-attachments/assets/00bbde67-bd0b-4672-910a-595d525c1f67" />
+
 
 | GT Yaw | 程式輸出 | 誤差 | 備註 |
 |---|---|---|---|
@@ -386,6 +388,23 @@ flowchart TD
 | 45° | 42° | -3° | ✅ |
 | 60° | -31° | -91° | ❌ 失效 |
 | 90° | -3° | -93° | ❌ 失效 |
+| GT Yaw | 程式輸出 | 誤差 | 備註 |
+
+
+### Pitch
+<img width="900" height="337" alt="pitch誤差曲線圖" src="https://github.com/user-attachments/assets/c1db32fc-1a72-4906-9ac8-22a61e7ed5b1" />
+<img width="900" height="300" alt="pitch誤差柱狀圖" src="https://github.com/user-attachments/assets/278235f8-e6a3-44ad-b312-fc11e1d28352" />
+
+| GT Pitch | 程式輸出 | 誤差 | 備註 |
+|---|---|---|---|
+| -45° | 67° | +112° | ❌ 失效 |
+| -30° | 53° | +83° | ❌ 失效 |
+| -15° | 33° | +48° | ❌ 失效 |
+| 0° | 6° | +6° | ✅ |
+| +15° | 78° | +63° | ❌ 失效 |
+| +30° | 47° | +17° | ⚠️ 偏差偏大 |
+| +45° | 11° | -34° | ❌ 失效 |
+
 
 ## 參數調整
 
